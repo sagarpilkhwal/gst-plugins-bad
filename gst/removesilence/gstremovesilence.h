@@ -2,6 +2,7 @@
  * Copyright (C) 2011 Tiago Katcipis <tiagokatcipis@gmail.com>
  * Copyright (C) 2011 Paulo Pizarro  <paulo.pizarro@gmail.com>
  * Copyright (C) 2012-2016 Nicola Murino  <nicola.murino@gmail.com>
+ * Copyright (C) 2016 Sagar Pilkhwal  <pilkhwal.sagar@gmail.com>
  *
  *
  * This library is free software; you can redistribute it and/or
@@ -40,6 +41,8 @@ G_BEGIN_DECLS
 #define GST_IS_REMOVESILENCE_CLASS(klass) \
   (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_REMOVE_SILENCE))
 
+typedef struct _GstRemoveSilenceCallbacks GstRemoveSilenceCallbacks;
+	
 typedef struct _GstRemoveSilence {
   GstBaseTransform parent;
   VADFilter* vad;
@@ -52,13 +55,22 @@ typedef struct _GstRemoveSilence {
   guint16 minimum_silence_buffers;
   guint64 consecutive_silence_time;
   guint64 minimum_silence_time;
+  guint64 max_voice_buffer_size;	
 } GstRemoveSilence;
 
 typedef struct _GstRemoveSilenceClass {
   GstBaseTransformClass parent_class;
+	
+	/* signals */
+	void        (*buffer)   (GstRemoveSilence *removesilence);
+	
 } GstRemoveSilenceClass;
 
+gsize total_buf_emited;
+
 GType gst_remove_silence_get_type (void);
+
+void SendMaxVoiceMessage(GstRemoveSilence *filter);
 
 G_END_DECLS
 

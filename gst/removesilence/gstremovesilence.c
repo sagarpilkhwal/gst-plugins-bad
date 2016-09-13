@@ -2,6 +2,7 @@
  * Copyright (C) 2011 Tiago Katcipis <tiagokatcipis@gmail.com>
  * Copyright (C) 2011 Paulo Pizarro  <paulo.pizarro@gmail.com>
  * Copyright (C) 2012-2016 Nicola Murino  <nicola.murino@gmail.com>
+ * Copyright (C) 2016 Sagar Pilkhwal  <pilkhwal.sagar@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -39,24 +40,33 @@
 #include <gst/gst.h>
 #include <gst/base/gstbasetransform.h>
 #include <gst/audio/audio.h>
+#include <glib-2.0/gobject/gmarshal.h>
+#include <glib-object.h>
+#include <string.h>
 
 #include "gstremovesilence.h"
 
 
 GST_DEBUG_CATEGORY_STATIC (gst_remove_silence_debug);
 #define GST_CAT_DEFAULT gst_remove_silence_debug
-#define DEFAULT_VAD_HYSTERESIS  480     /* 60 mseg */
+#define DEFAULT_VAD_HYSTERESIS  960     /* 60 mseg = 480 */
 #define MINIMUM_SILENCE_BUFFERS_MIN  0
 #define MINIMUM_SILENCE_BUFFERS_MAX  10000
 #define MINIMUM_SILENCE_BUFFERS_DEF  0
 #define MINIMUM_SILENCE_TIME_MIN  0
 #define MINIMUM_SILENCE_TIME_MAX  10000000000
 #define MINIMUM_SILENCE_TIME_DEF  0
+#define MAXIMUM_VOICE_BUFFER_SIZE_1 5000
+#define MAXIMUM_VOICE_BUFFER_SIZE_2 30000
+#define MAXIMUM_VOICE_BUFFER_SIZE_MIN 1000 
+#define MAXIMUM_VOICE_BUFFER_SIZE_MAX 100000
+#define MAXIMUM_VOICE_BUFFER_SIZE_DEF 20000
 
 /* Filter signals and args */
 enum
 {
   /* FILL ME */
+  SIGNAL_BUFFER,
   LAST_SIGNAL
 };
 
@@ -68,7 +78,8 @@ enum
   PROP_SQUASH,
   PROP_SILENT,
   PROP_MINIMUM_SILENCE_BUFFERS,
-  PROP_MINIMUM_SILENCE_TIME
+  PROP_MINIMUM_SILENCE_TIME,
+  PROP_MAXIMUM_VOICE_BUFFER_SIZE
 };
 
 
@@ -78,7 +89,7 @@ static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_STATIC_CAPS ("audio/x-raw, "
         "format = (string) " GST_AUDIO_NE (S16) ", "
         "layout = (string) interleaved, "
-        "rate = (int) [ 1, MAX ], " "channels = (int) 1"));
+        "rate = (int) 8000, " "channels = (int) 1")); /* Hardcoded */ 
 
 static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
@@ -106,6 +117,10 @@ static GstFlowReturn gst_remove_silence_transform_ip (GstBaseTransform * base,
 static void gst_remove_silence_finalize (GObject * obj);
 
 /* GObject vmethod implementations */
+
+
+//static GstElementClass *parent_class;
+static guint gst_remove_silence_signals[LAST_SIGNAL] = { 0 };
 
 /* initialize the removesilence's class */
 static void
@@ -156,6 +171,30 @@ gst_remove_silence_class_init (GstRemoveSilenceClass * klass)
           " silence, 0 means disabled",
           MINIMUM_SILENCE_TIME_MIN, MINIMUM_SILENCE_TIME_MAX,
           MINIMUM_SILENCE_TIME_DEF, G_PARAM_READWRITE));
+	
+  g_object_class_install_property (gobject_class, PROP_MAXIMUM_VOICE_BUFFER_SIZE,
+      g_param_spec_uint64 ("max_voice_buffer_size",
+          "Maximum voice buffer size",
+          "Define the maximum voice buffer size",
+          MAXIMUM_VOICE_BUFFER_SIZE_MIN, MAXIMUM_VOICE_BUFFER_SIZE_MAX, MAXIMUM_VOICE_BUFFER_SIZE_DEF, G_PARAM_READWRITE));
+	
+	
+	
+  /* Add signals */
+	gst_remove_silence_signals[SIGNAL_BUFFER] =
+    g_signal_new (	"buffer", 
+				  	G_TYPE_FROM_CLASS (klass),
+					0, //G_SIGNAL_RUN_LAST,
+					0, //G_STRUCT_OFFSET (GstRemoveSilenceClass, buffer), 
+					NULL, 
+					NULL,
+					g_cclosure_marshal_generic,
+					G_TYPE_NONE, 
+					2,//1, 
+					G_TYPE_POINTER, G_TYPE_INT //GST_TYPE_BUFFER
+				 );
+	
+  /* send signals of every voice buffer*/
 
   gst_element_class_set_static_metadata (gstelement_class,
       "RemoveSilence",
@@ -163,10 +202,13 @@ gst_remove_silence_class_init (GstRemoveSilenceClass * klass)
       "Removes all the silence periods from the audio stream.",
       "Tiago Katcipis <tiagokatcipis@gmail.com>\n \
        Paulo Pizarro  <paulo.pizarro@gmail.com>\n \
-       Nicola Murino  <nicola.murino@gmail.com>");
+       Nicola Murino  <nicola.murino@gmail.com>\n \
+	   Sagar Pilkhwal <pilkhwal.sagar@gmail.com>");
 
-  gst_element_class_add_static_pad_template (gstelement_class, &src_template);
-  gst_element_class_add_static_pad_template (gstelement_class, &sink_template);
+  gst_element_class_add_pad_template (gstelement_class,
+      gst_static_pad_template_get (&src_template));
+  gst_element_class_add_pad_template (gstelement_class,
+      gst_static_pad_template_get (&sink_template));
 
   GST_BASE_TRANSFORM_CLASS (klass)->transform_ip =
       GST_DEBUG_FUNCPTR (gst_remove_silence_transform_ip);
@@ -185,11 +227,12 @@ gst_remove_silence_init (GstRemoveSilence * filter)
   filter->squash = FALSE;
   filter->ts_offset = 0;
   filter->silence_detected = FALSE;
-  filter->silent = TRUE;
+  filter->silent = FALSE; //default messages are ON
   filter->consecutive_silence_buffers = 0;
   filter->minimum_silence_buffers = MINIMUM_SILENCE_BUFFERS_DEF;
   filter->minimum_silence_time = MINIMUM_SILENCE_TIME_DEF;
   filter->consecutive_silence_time = 0;
+  filter->max_voice_buffer_size = MAXIMUM_VOICE_BUFFER_SIZE_DEF;
 
   if (!filter->vad) {
     GST_DEBUG ("Error initializing VAD !!");
@@ -201,7 +244,7 @@ static void
 gst_remove_silence_finalize (GObject * obj)
 {
   GstRemoveSilence *filter = GST_REMOVE_SILENCE (obj);
-  GST_DEBUG ("Destroying VAD");
+  //GST_DEBUG ("Destroying VAD");
   vad_destroy (filter->vad);
   filter->vad = NULL;
   GST_DEBUG ("VAD Destroyed");
@@ -233,6 +276,10 @@ gst_remove_silence_set_property (GObject * object, guint prop_id,
     case PROP_MINIMUM_SILENCE_TIME:
       filter->minimum_silence_time = g_value_get_uint64 (value);
       break;
+	case PROP_MAXIMUM_VOICE_BUFFER_SIZE:
+	  filter->max_voice_buffer_size = g_value_get_uint64 (value);
+		  GST_DEBUG(" +++++++++++++ setting max voice: %d", (int) filter->max_voice_buffer_size);
+	  break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -264,10 +311,26 @@ gst_remove_silence_get_property (GObject * object, guint prop_id,
     case PROP_MINIMUM_SILENCE_TIME:
       g_value_set_uint64 (value, filter->minimum_silence_time);
       break;
+    case PROP_MAXIMUM_VOICE_BUFFER_SIZE:
+      g_value_set_uint64 (value, filter->max_voice_buffer_size);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
   }
+}
+
+void SendMaxVoiceMessage(GstRemoveSilence *filter){
+	GstStructure *s;
+	GstMessage *m;      
+
+	gint64 buffer_emited = total_buf_emited;
+	total_buf_emited = 0; //this needs to be done fast before the next frames comes in as silent
+
+	s = gst_structure_new ("removesilence", "max_voice_reached",G_TYPE_INT64, buffer_emited,  NULL);
+
+	m = gst_message_new_element (GST_OBJECT (filter), s);
+	gst_element_post_message (GST_ELEMENT (filter), m);
 }
 
 static GstFlowReturn
@@ -277,23 +340,29 @@ gst_remove_silence_transform_ip (GstBaseTransform * trans, GstBuffer * inbuf)
   int frame_type;
   GstMapInfo map;
   gboolean consecutive_silence_reached;
-
+  
   filter = GST_REMOVE_SILENCE (trans);
 
   gst_buffer_map (inbuf, &map, GST_MAP_READ);
-  frame_type =
-      vad_update (filter->vad, (gint16 *) map.data, map.size / sizeof (gint16));
-  gst_buffer_unmap (inbuf, &map);
-
+       	
+  frame_type = vad_update (filter->vad, (gint16 *) map.data, map.size / sizeof (gint16) );
+	
+  gst_buffer_unmap (inbuf, &map); 
+  
+	//VAD SILENCE
   if (frame_type == VAD_SILENCE) {
-    GST_DEBUG ("Silence detected");
+	if (total_buf_emited >= filter->max_voice_buffer_size) {     
+		SendMaxVoiceMessage(filter);
+		GST_ERROR ("MAX_Voice 1 Max");
+    }
+	GST_ERROR ("\nSilence detected");
     filter->consecutive_silence_buffers++;
     if (GST_BUFFER_DURATION_IS_VALID (inbuf)) {
       filter->consecutive_silence_time += inbuf->duration;
     } else {
-      GST_WARNING
-          ("Invalid buffer duration, consecutive_silence_time update not possible");
+      GST_DEBUG ("Invalid buffer duration, consecutive_silence_time update not possible");
     }
+    
     if (filter->minimum_silence_buffers == 0
         && filter->minimum_silence_time == 0) {
       consecutive_silence_reached = TRUE;
@@ -305,47 +374,85 @@ gst_remove_silence_transform_ip (GstBaseTransform * trans, GstBuffer * inbuf)
           || (filter->minimum_silence_time > 0
           && filter->consecutive_silence_time >= filter->minimum_silence_time);
     }
+    
     if (!filter->silence_detected && consecutive_silence_reached) {
       if (!filter->silent) {
         if (GST_BUFFER_PTS_IS_VALID (inbuf)) {
           GstStructure *s;
           GstMessage *m;
+          
+		  gint64 buffer_emited = total_buf_emited;
+			
+          total_buf_emited = 0;
+          
           s = gst_structure_new ("removesilence", "silence_detected",
-              G_TYPE_UINT64, GST_BUFFER_PTS (inbuf) - filter->ts_offset, NULL);
+              G_TYPE_INT64, buffer_emited /*GST_BUFFER_PTS (inbuf) - filter->ts_offset*/, NULL);
           m = gst_message_new_element (GST_OBJECT (filter), s);
           gst_element_post_message (GST_ELEMENT (filter), m);
+          GST_DEBUG (" ---------------------- silence_detected: %d", (int)buffer_emited);
         }
       }
       filter->silence_detected = TRUE;
     }
 
     if (filter->remove && consecutive_silence_reached) {
-      GST_DEBUG ("Removing silence");
+      //GST_DEBUG ("Removing silence");
       if (filter->squash) {
         if (GST_BUFFER_DURATION_IS_VALID (inbuf)) {
           filter->ts_offset += inbuf->duration;
         } else {
-          GST_WARNING ("Invalid buffer duration: ts_offset not updated");
+          GST_DEBUG ("Invalid buffer duration: ts_offset not updated");
         }
       }
       return GST_BASE_TRANSFORM_FLOW_DROPPED;
     }
 
   } else {
+    //GST_ERROR ("\nVoice detected");
     filter->consecutive_silence_buffers = 0;
     filter->consecutive_silence_time = 0;
+    
+    
+    if (GST_BUFFER_PTS_IS_VALID (inbuf)) {
+		
+		GstMapInfo inbuf_map;
+		gsize buffer_size;
+		guint8 *buffer;
+		
+		gst_buffer_map (inbuf, &inbuf_map, GST_MAP_READ); /* map the buffer */
+		
+		buffer_size = (gsize)inbuf_map.size; /* copy the buffer size */
+		buffer = (guint8 *)g_malloc0_n(buffer_size, sizeof(gint8)); /* allocate memory for buffer data */
+		memcpy(buffer, inbuf_map.data, buffer_size); /* copy the buffer data */		
+		
+		gst_buffer_unmap (inbuf, &inbuf_map); /* unmap the buffer */
+		
+		/* emit the signal with buffer */
+		g_signal_emit (filter, gst_remove_silence_signals[SIGNAL_BUFFER], 0, buffer, (gint)buffer_size);
+		
+		/* calculate the total size of buffer */
+		total_buf_emited += (buffer_size / sizeof (guint8));
+		if (total_buf_emited > filter->max_voice_buffer_size + 5000) {     
+			SendMaxVoiceMessage(filter);
+			GST_DEBUG ("MAX_Voice 2");
+    	}
+    }
+	    
     if (filter->silence_detected) {
-      if (!filter->silent) {
-        if (GST_BUFFER_PTS_IS_VALID (inbuf)) {
-          GstStructure *s;
-          GstMessage *m;
-          s = gst_structure_new ("removesilence", "silence_finished",
-              G_TYPE_UINT64, GST_BUFFER_PTS (inbuf) - filter->ts_offset, NULL);
-          m = gst_message_new_element (GST_OBJECT (filter), s);
-          gst_element_post_message (GST_ELEMENT (filter), m);
+        if (!filter->silent) {
+          if (GST_BUFFER_PTS_IS_VALID (inbuf)) {
+            GstStructure *s;
+            GstMessage *m;
+
+            s = gst_structure_new ("removesilence", "silence_finished",
+                G_TYPE_UINT64, GST_BUFFER_PTS (inbuf) - filter->ts_offset, NULL);
+
+            m = gst_message_new_element (GST_OBJECT (filter), s);
+            gst_element_post_message (GST_ELEMENT (filter), m);
+            //GST_ERROR ("silence_finished");
+          }
         }
-      }
-      filter->silence_detected = FALSE;
+        filter->silence_detected = FALSE;
     }
   }
 
@@ -354,7 +461,7 @@ gst_remove_silence_transform_ip (GstBaseTransform * trans, GstBuffer * inbuf)
       inbuf = gst_buffer_make_writable (inbuf);
       GST_BUFFER_PTS (inbuf) -= filter->ts_offset;
     } else {
-      GST_WARNING ("Invalid buffer pts, update not possibile");
+      GST_DEBUG ("Invalid buffer pts, update not possibile");
     }
   }
 

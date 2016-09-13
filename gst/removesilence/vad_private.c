@@ -18,17 +18,26 @@
  * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
  * Boston, MA 02110-1301, USA.
  */
+/*
+* https://it.wikipedia.org/wiki/Decibel to get the dB value in deicmals
+* -60Db = 0.000001
+* 4294967296 * 0.000001 = 4295 or 0x000010C7 hex
+* -40dB = 0.0001 using the formula above you should have 0x00068DB9
+* -35.25dB = 0.0003 , 4294967296 * 0.0003 = 1288490.1888 : to hex: 0x0013A92A
+*/
 
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <glib.h>
+#include <gst/gst.h>
 #include "vad_private.h"
 
 #define VAD_POWER_ALPHA     0x0800      /* Q16 */
-#define VAD_POWER_THRESHOLD 0x000010C7  /* -60 dB (square wave) */
+//#define VAD_POWER_THRESHOLD  0x00068DB9  /* -40 dB (square wave) Changed by SpringCT*/ 
+#define VAD_POWER_THRESHOLD  0x0013A92A  /* -35 dB (square wave) Changed by SpringCT*/ 
 #define VAD_ZCR_THRESHOLD   0
-#define VAD_BUFFER_SIZE     256
+#define VAD_BUFFER_SIZE     128
 
 
 union pgen
@@ -40,6 +49,8 @@ union pgen
   guint16 *w;
   gint16 *s;
 };
+
+guint64 vad_power_priv;
 
 struct _cqueue_s
 {
@@ -132,6 +143,8 @@ vad_update (struct _vad_s * p, gint16 * data, gint len)
   frame_type = (p->vad_power > VAD_POWER_THRESHOLD
       && p->vad_zcr < VAD_ZCR_THRESHOLD) ? VAD_VOICE : VAD_SILENCE;
 
+  //GST_ERROR(" ************************* VAD POWER: %" G_GUINT64_FORMAT "\n", p->vad_power);
+  
   if (p->vad_state != frame_type) {
     /* Voice to silence transition */
     if (p->vad_state == VAD_VOICE) {
