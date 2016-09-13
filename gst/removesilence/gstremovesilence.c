@@ -2,7 +2,7 @@
  * Copyright (C) 2011 Tiago Katcipis <tiagokatcipis@gmail.com>
  * Copyright (C) 2011 Paulo Pizarro  <paulo.pizarro@gmail.com>
  * Copyright (C) 2012-2016 Nicola Murino  <nicola.murino@gmail.com>
- * Copyright (C) 2016 Sagar Pilkhwal  <pilkhwal.sagar@gmail.com>
+ * Copyright (C) 2016 Sagar Pilkhwal  <sagar.pilkhwal@springcomputing.in>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -203,7 +203,7 @@ gst_remove_silence_class_init (GstRemoveSilenceClass * klass)
       "Tiago Katcipis <tiagokatcipis@gmail.com>\n \
        Paulo Pizarro  <paulo.pizarro@gmail.com>\n \
        Nicola Murino  <nicola.murino@gmail.com>\n \
-	   Sagar Pilkhwal <pilkhwal.sagar@gmail.com>");
+	   Sagar Pilkhwal <sagar.pilkhwal@springcomputing.in>");
 
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&src_template));
