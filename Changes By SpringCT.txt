@@ -1,0 +1,6 @@
+Goal:
+	- get non silent audio buffer so that it could be processed to get text from speech by using some webservices
+
+How to do it ?
+	- Apply patched provided by  Nicola  @ https://bugzilla.gnome.org/show_bug.cgi?id=671954
+	- Modify code accordingly
