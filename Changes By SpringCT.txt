@@ -4,3 +4,5 @@ Goal:
 How to do it ?
 	- Apply patched provided by  Nicola  @ https://bugzilla.gnome.org/show_bug.cgi?id=671954
 	- Modify code accordingly
+	
+	test commit
